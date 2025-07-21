@@ -1,29 +1,33 @@
-const User = require('../models/user');
+const User = require('../models/User');
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 
+// REGISTER FUNCTION
 exports.register = async (req, res) => {
   const { username, email, password } = req.body;
 
   try {
+    // Check if email already exists
     const existingUser = await User.findOne({ email });
     if (existingUser)
-      return res.status(400).json({ message: 'Email already exists' });
+      return res.status(400).json({ message: 'Email already registered' });
 
+    // Hash password before saving
     const hashedPassword = await bcrypt.hash(password, 10);
 
-    const newUser = new User({
+    // Create and save new user
+    const user = new User({
       username,
       email,
-      password: hashedPassword,
+      password: hashedPassword
     });
 
-    await newUser.save();
+    await user.save();
 
     res.status(201).json({ message: 'User registered successfully' });
 
-  } catch (error) {
-    console.error(error);
+  } catch (err) {
+    console.error(err.message);
     res.status(500).json({ message: 'Server error' });
   }
 };
@@ -66,4 +70,3 @@ exports.login = async (req, res) => {
     res.status(500).json({ message: 'Server error' });
   }
 };
-

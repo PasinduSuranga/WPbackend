@@ -1,17 +1,17 @@
 const express = require('express');
 const cors = require('cors');
 require('dotenv').config();
-const connectDB = require('./config/db'); // ✅ database config
-const authRoutes = require('./routes/authRoutes'); // ✅ route file
+
+const connectDB = require('./config/db');
 
 const app = express();
+app.use(cors());
+app.use(express.json());
+const authRoutes = require('./routes/authRoutes');
+app.use('/api/auth', authRoutes);
 
-connectDB(); // ✅ connect to MongoDB
-
-app.use(cors()); // ✅ allow frontend requests
-app.use(express.json()); // ✅ parse incoming JSON
-
-app.use('/api/auth', authRoutes); // ✅ this line enables the register route
+// Connect to MongoDB
+connectDB();
 
 app.get('/', (req, res) => {
   res.send('API Running');
@@ -19,5 +19,5 @@ app.get('/', (req, res) => {
 
 const PORT = process.env.PORT || 5000;
 app.listen(PORT, () => {
-  console.log(`Server running at http://localhost:${PORT}`);
+  console.log(`✅ Server running on http://localhost:${PORT}`);
 });
