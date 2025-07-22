@@ -1,4 +1,4 @@
-const User = require('../models/User');
+const User = require('../models/user');
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 
@@ -32,33 +32,31 @@ exports.register = async (req, res) => {
   }
 };
 
+// LOGIN FUNCTION
 exports.login = async (req, res) => {
   const { email, password } = req.body;
 
   try {
-    // 1. Check if user with given email exists
     const user = await User.findOne({ email });
     if (!user)
       return res.status(400).json({ message: 'Invalid email or password' });
 
-    // 2. Compare entered password with hashed password in DB
     const isMatch = await bcrypt.compare(password, user.password);
     if (!isMatch)
       return res.status(400).json({ message: 'Invalid email or password' });
 
-    // 3. Create JWT token
+    // ✅ FIXED: token now uses `id` instead of `userId`
     const token = jwt.sign(
-      { userId: user._id, role: user.role },
+      { id: user._id, role: user.role },
       process.env.JWT_SECRET,
       { expiresIn: '1h' }
     );
 
-    // 4. Respond with token and user info
     res.status(200).json({
       message: 'Login successful',
       token,
       user: {
-        id: user._id,
+        id: user._id.toString(),
         username: user.username,
         email: user.email,
         role: user.role
