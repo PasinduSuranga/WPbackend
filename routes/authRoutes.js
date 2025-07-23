@@ -1,113 +1,124 @@
 const express = require('express');
 const router = express.Router();
-const { register, login } = require('../controllers/authController');
+const crypto = require('crypto');
+const jwt = require('jsonwebtoken');
+const bcrypt = require('bcryptjs');
+const nodemailer = require('nodemailer');
 const protect = require('../middleware/authMiddleware');
-const User = require('../models/user'); // ✅ Proper model import
-const user = require('../models/user');
+const User = require('../models/user');
 
-// Register
-router.post('/register', register);
-
-// Login
-router.post('/login', login);
-
-// Protected test route
-router.get('/protected', protect, (req, res) => {
-  res.json({
-    message: 'You accessed a protected route!',
-    user: req.user,
-  });
+// ✅ Setup Nodemailer with Gmail
+const transporter = nodemailer.createTransport({
+  service: 'gmail',
+  auth: {
+    user: process.env.GMAIL_USER,        // Your Gmail address
+    pass: process.env.GMAIL_PASS         // Your Gmail App Password (not your real password!)
+  }
 });
 
-// Get profile
-router.get('/profile', protect, async (req, res) => {
-  res.status(200).json({
-    success: true,
-    user: req.user,
-  });
-});
-
-// Update profile
-router.put('/profile', protect, async (req, res) => {
+// ========== REGISTER ==========
+router.post('/register', async (req, res) => {
+  const { username, email, password } = req.body;
   try {
-    const loggedInUser = req.user;
-    const { username, email } = req.body;
+    const existingUser = await User.findOne({ email });
+    if (existingUser)
+      return res.status(400).json({ message: 'Email already registered' });
 
-    // If email is changing, ensure it's not already in use
-    if (email && email !== loggedInUser.email) {
-      const emailExists = await User.findOne({ email });
+    const hashedPassword = await bcrypt.hash(password, 10);
+    const user = new User({ username, email, password: hashedPassword });
+    await user.save();
 
-      if (emailExists && emailExists._id.toString() !== loggedInUser._id.toString()) {
-        return res.status(400).json({ success: false, message: 'Email already in use' });
-      }
+    res.status(201).json({ message: 'User registered successfully' });
+  } catch (err) {
+    console.error('Register Error:', err);
+    res.status(500).json({ message: 'Server error' });
+  }
+});
 
-      loggedInUser.email = email;
-    }
+// ========== LOGIN ==========
+router.post('/login', async (req, res) => {
+  const { email, password } = req.body;
+  try {
+    const user = await User.findOne({ email });
+    if (!user || !(await bcrypt.compare(password, user.password)))
+      return res.status(400).json({ message: 'Invalid email or password' });
 
-    if (username) {
-      loggedInUser.username = username;
-    }
-
-    await loggedInUser.save();
+    const token = jwt.sign({ id: user._id, role: user.role }, process.env.JWT_SECRET, { expiresIn: '1h' });
 
     res.status(200).json({
-      success: true,
-      message: 'Profile updated successfully',
+      message: 'Login successful',
+      token,
       user: {
-        id: loggedInUser._id,
-        username: loggedInUser.username,
-        email: loggedInUser.email,
-        role: loggedInUser.role,
+        id: user._id,
+        username: user.username,
+        email: user.email,
+        role: user.role,
       },
     });
   } catch (error) {
-    console.error(error);
-    res.status(500).json({ success: false, message: 'Server error' });
+    console.error('Login Error:', error);
+    res.status(500).json({ message: 'Server error' });
   }
 });
 
-// ✅ Change password route (corrected)
-router.put('/change-password', protect, async (req, res) => {
+// ========== FORGOT PASSWORD ==========
+router.post('/forgot-password', async (req, res) => {
+  const { email } = req.body;
   try {
-    const currentUser = req.user;
-    const { currentPassword, newPassword } = req.body;
+    const user = await User.findOne({ email });
+    if (!user)
+      return res.status(404).json({ message: 'User with this email does not exist' });
 
-    // Input validation
-    if (!currentPassword || !newPassword) {
-      return res.status(400).json({ success: false, message: 'Both current and new passwords are required' });
-    }
+    const resetToken = user.generatePasswordResetToken();
+    await user.save();
 
-    // Get the full user instance from DB
-    const freshUser = await User.findById(currentUser._id);
+    const resetUrl = `${process.env.FRONTEND_URL}/reset-password/${resetToken}`;
 
-    if (!freshUser) {
-      return res.status(404).json({ success: false, message: 'User not found' });
-    }
+    const mailOptions = {
+      from: `"Your App" <${process.env.GMAIL_USER}>`,
+      to: user.email,
+      subject: 'Reset Your Password',
+      html: `
+        <h3>Hello ${user.username},</h3>
+        <p>Click the link below to reset your password:</p>
+        <a href="${resetUrl}">${resetUrl}</a>
+        <p>This link expires in 10 minutes.</p>
+      `
+    };
 
-    // Check current password
-    const isMatch = await freshUser.matchPassword(currentPassword);
-    if (!isMatch) {
-      return res.status(401).json({ success: false, message: 'Current password is incorrect' });
-    }
+    await transporter.sendMail(mailOptions);
+    res.status(200).json({ message: 'Reset password email sent' });
 
-    const isSame = await freshUser.matchPassword(newPassword);
-    if (isSame) {
-      return res.status(400).json({
-        success: false,
-        message: 'New password must be different from the current password',
-      });
-    }
-
-    // Set new password
-    freshUser.password = newPassword;
-    await freshUser.save();
-
-    res.status(200).json({ success: true, message: 'Password updated successfully' });
   } catch (error) {
-    console.error(error);
-    res.status(500).json({ success: false, message: 'Server error' });
+    console.error('Forgot Password Error:', error);
+    res.status(500).json({ message: 'Server error' });
   }
 });
 
-// ✅ Keep this at the very end
+// ========== RESET PASSWORD ==========
+router.post('/reset-password/:token', async (req, res) => {
+  const { newPassword } = req.body;
+  const resetTokenHash = crypto.createHash('sha256').update(req.params.token).digest('hex');
+
+  try {
+    const user = await User.findOne({
+      resetPasswordToken: resetTokenHash,
+      resetPasswordExpire: { $gt: Date.now() },
+    });
+
+    if (!user)
+      return res.status(400).json({ message: 'Invalid or expired token' });
+
+    user.password = await bcrypt.hash(newPassword, 10);
+    user.resetPasswordToken = undefined;
+    user.resetPasswordExpire = undefined;
+    await user.save();
+
+    res.status(200).json({ message: 'Password reset successful' });
+  } catch (error) {
+    console.error('Reset Password Error:', error);
+    res.status(500).json({ message: 'Server error' });
+  }
+});
+
 module.exports = router;
